@@ -370,6 +370,52 @@ func (_m *ImageReaderWriter) FindByZipFileID(ctx context.Context, zipFileID mode
 	return r0, r1
 }
 
+// FindDuplicateImageFiles provides a mock function with given fields: ctx
+func (_m *ImageReaderWriter) FindDuplicateImageFiles(ctx context.Context) ([][]*models.ImageDuplicateFile, error) {
+	ret := _m.Called(ctx)
+
+	var r0 [][]*models.ImageDuplicateFile
+	if rf, ok := ret.Get(0).(func(context.Context) [][]*models.ImageDuplicateFile); ok {
+		r0 = rf(ctx)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).([][]*models.ImageDuplicateFile)
+		}
+	}
+
+	var r1 error
+	if rf, ok := ret.Get(1).(func(context.Context) error); ok {
+		r1 = rf(ctx)
+	} else {
+		r1 = ret.Error(1)
+	}
+
+	return r0, r1
+}
+
+// FindDuplicates provides a mock function with given fields: ctx, distance, filter
+func (_m *ImageReaderWriter) FindDuplicates(ctx context.Context, distance int, filter *models.ImageFilterType) ([][]*models.Image, error) {
+	ret := _m.Called(ctx, distance, filter)
+
+	var r0 [][]*models.Image
+	if rf, ok := ret.Get(0).(func(context.Context, int, *models.ImageFilterType) [][]*models.Image); ok {
+		r0 = rf(ctx, distance, filter)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).([][]*models.Image)
+		}
+	}
+
+	var r1 error
+	if rf, ok := ret.Get(1).(func(context.Context, int, *models.ImageFilterType) error); ok {
+		r1 = rf(ctx, distance, filter)
+	} else {
+		r1 = ret.Error(1)
+	}
+
+	return r0, r1
+}
+
 // FindMany provides a mock function with given fields: ctx, ids
 func (_m *ImageReaderWriter) FindMany(ctx context.Context, ids []int) ([]*models.Image, error) {
 	ret := _m.Called(ctx, ids)

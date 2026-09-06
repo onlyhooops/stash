@@ -39,6 +39,14 @@ type Image struct {
 	PerformerIDs RelatedIDs `json:"performer_ids"`
 }
 
+// ImageDuplicateFile represents an image file that is a byte-level duplicate
+// (ie, shares a content fingerprint such as md5) of another image file,
+// together with the image that it belongs to.
+type ImageDuplicateFile struct {
+	Image *Image     `gqlgen:"image" json:"image"`
+	File  *ImageFile `gqlgen:"file" json:"file"`
+}
+
 func NewImage() Image {
 	currentTime := time.Now()
 	return Image{

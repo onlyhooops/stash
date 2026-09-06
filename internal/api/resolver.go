@@ -67,6 +67,9 @@ func (r *Resolver) Scene() SceneResolver {
 func (r *Resolver) Image() ImageResolver {
 	return &imageResolver{r}
 }
+func (r *Resolver) ImageDuplicateFile() ImageDuplicateFileResolver {
+	return &imageDuplicateFileResolver{r}
+}
 func (r *Resolver) SceneMarker() SceneMarkerResolver {
 	return &sceneMarkerResolver{r}
 }
@@ -122,6 +125,7 @@ type performerResolver struct{ *Resolver }
 type sceneResolver struct{ *Resolver }
 type sceneMarkerResolver struct{ *Resolver }
 type imageResolver struct{ *Resolver }
+type imageDuplicateFileResolver struct{ *Resolver }
 type studioResolver struct{ *Resolver }
 
 // movie is group under the hood

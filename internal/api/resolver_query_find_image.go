@@ -134,3 +134,34 @@ func (r *queryResolver) AllImages(ctx context.Context) (ret []*models.Image, err
 
 	return ret, nil
 }
+
+func (r *queryResolver) FindDuplicateImages(ctx context.Context, distance *int, imageFilter *models.ImageFilterType) (ret [][]*models.Image, err error) {
+	dist := 0
+	if distance != nil {
+		dist = *distance
+	}
+
+	if err := r.withReadTxn(ctx, func(ctx context.Context) error {
+		ret, err = r.repository.Image.FindDuplicates(ctx, dist, imageFilter)
+		return err
+	}); err != nil {
+		return nil, err
+	}
+
+	return ret, nil
+}
+
+func (r *queryResolver) FindDuplicateImageFiles(ctx context.Context) (ret [][]*models.ImageDuplicateFile, err error) {
+	if err := r.withReadTxn(ctx, func(ctx context.Context) error {
+		ret, err = r.repository.Image.FindDuplicateImageFiles(ctx)
+		return err
+	}); err != nil {
+		return nil, err
+	}
+
+	return ret, nil
+}
+
+func (r *imageDuplicateFileResolver) File(ctx context.Context, obj *models.ImageDuplicateFile) (*ImageFile, error) {
+	return &ImageFile{ImageFile: obj.File}, nil
+}

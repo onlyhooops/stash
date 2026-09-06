@@ -3434,3 +3434,479 @@ func TestImageQueryCustomFields(t *testing.T) {
 // TODO Count
 // TODO SizeCount
 // TODO All
+
+func TestImageStore_FindDuplicates(t *testing.T) {
+	qb := db.Image
+
+	// Helper to create an image with a single file with the given phash
+	createDupeImage := func(ctx context.Context, name string, phash int64) (*models.Image, error) {
+		imageFile := &models.ImageFile{
+			BaseFile: &models.BaseFile{
+				Path:           getFilePath(folderIdxWithImageFiles, name+".jpg"),
+				Basename:       name + ".jpg",
+				ParentFolderID: folderIDs[folderIdxWithImageFiles],
+				Fingerprints: models.Fingerprints{
+					{Type: models.FingerprintTypeMD5, Fingerprint: name + "_md5"},
+					{Type: models.FingerprintTypePhash, Fingerprint: phash},
+				},
+			},
+			Width:  1920,
+			Height: 1080,
+		}
+
+		if err := db.File.Create(ctx, imageFile); err != nil {
+			return nil, err
+		}
+
+		image := &models.Image{
+			Title: name,
+		}
+
+		if err := qb.Create(ctx, &models.CreateImageInput{
+			Image:   image,
+			FileIDs: []models.FileID{imageFile.ID},
+		}); err != nil {
+			return nil, err
+		}
+
+		return image, nil
+	}
+
+	withRollbackTxn(func(ctx context.Context) error {
+		// Create two pairs of duplicate images and one image with two
+		// identical files (which should not be considered a duplicate of
+		// itself)
+		const sharedPhash int64 = 999999
+		const otherPhash int64 = 888888
+		const selfPhash int64 = 777777
+
+		pairA1, err := createDupeImage(ctx, "DupeImage_A1", sharedPhash)
+		if err != nil {
+			t.Errorf("failed to create pair A image 1: %v", err)
+			return nil
+		}
+		pairA2, err := createDupeImage(ctx, "DupeImage_A2", sharedPhash)
+		if err != nil {
+			t.Errorf("failed to create pair A image 2: %v", err)
+			return nil
+		}
+		pairB1, err := createDupeImage(ctx, "DupeImage_B1", otherPhash)
+		if err != nil {
+			t.Errorf("failed to create pair B image 1: %v", err)
+			return nil
+		}
+		pairB2, err := createDupeImage(ctx, "DupeImage_B2", otherPhash)
+		if err != nil {
+			t.Errorf("failed to create pair B image 2: %v", err)
+			return nil
+		}
+
+		// image with two files with the same phash - should not match itself
+		selfImageFile1 := &models.ImageFile{
+			BaseFile: &models.BaseFile{
+				Path:           getFilePath(folderIdxWithImageFiles, "DupeImage_Self1.jpg"),
+				Basename:       "DupeImage_Self1.jpg",
+				ParentFolderID: folderIDs[folderIdxWithImageFiles],
+				Fingerprints: models.Fingerprints{
+					{Type: models.FingerprintTypePhash, Fingerprint: selfPhash},
+				},
+			},
+			Width:  1920,
+			Height: 1080,
+		}
+		selfImageFile2 := &models.ImageFile{
+			BaseFile: &models.BaseFile{
+				Path:           getFilePath(folderIdxWithImageFiles, "DupeImage_Self2.jpg"),
+				Basename:       "DupeImage_Self2.jpg",
+				ParentFolderID: folderIDs[folderIdxWithImageFiles],
+				Fingerprints: models.Fingerprints{
+					{Type: models.FingerprintTypePhash, Fingerprint: selfPhash},
+				},
+			},
+			Width:  1280,
+			Height: 720,
+		}
+		if err := db.File.Create(ctx, selfImageFile1); err != nil {
+			t.Errorf("failed to create self image file 1: %v", err)
+			return nil
+		}
+		if err := db.File.Create(ctx, selfImageFile2); err != nil {
+			t.Errorf("failed to create self image file 2: %v", err)
+			return nil
+		}
+		selfImage := &models.Image{Title: "DupeImage_Self"}
+		if err := qb.Create(ctx, &models.CreateImageInput{
+			Image:   selfImage,
+			FileIDs: []models.FileID{selfImageFile1.ID, selfImageFile2.ID},
+		}); err != nil {
+			t.Errorf("failed to create self image: %v", err)
+			return nil
+		}
+
+		duplicateIDs := []int{pairA1.ID, pairA2.ID, pairB1.ID, pairB2.ID}
+
+		// Exact matching should find the two pairs, but not the self image
+		got, err := qb.FindDuplicates(ctx, 0, nil)
+		if err != nil {
+			t.Errorf("ImageStore.FindDuplicates() error = %v", err)
+			return nil
+		}
+
+		assert.Len(t, got, 2)
+
+		gotIDs := []int{}
+		for _, group := range got {
+			assert.Len(t, group, 2)
+			for _, image := range group {
+				gotIDs = append(gotIDs, image.ID)
+			}
+		}
+
+		for _, id := range duplicateIDs {
+			assert.Contains(t, gotIDs, id)
+		}
+		assert.NotContains(t, gotIDs, selfImage.ID)
+
+		// Distance matching should give the same results
+		got, err = qb.FindDuplicates(ctx, 1, nil)
+		if err != nil {
+			t.Errorf("ImageStore.FindDuplicates() error = %v", err)
+			return nil
+		}
+
+		assert.Len(t, got, 2)
+
+		gotIDs = []int{}
+		for _, group := range got {
+			for _, image := range group {
+				gotIDs = append(gotIDs, image.ID)
+			}
+		}
+
+		for _, id := range duplicateIDs {
+			assert.Contains(t, gotIDs, id)
+		}
+		assert.NotContains(t, gotIDs, selfImage.ID)
+
+		return nil
+	})
+}
+
+func TestImageStore_FindDuplicatesWithFilter(t *testing.T) {
+	qb := db.Image
+
+	// Helper to create an image with a specific phash and organized state
+	createDupeImage := func(ctx context.Context, name string, phash int64, organized bool) (*models.Image, error) {
+		imageFile := &models.ImageFile{
+			BaseFile: &models.BaseFile{
+				Path:           getFilePath(folderIdxWithImageFiles, name+".jpg"),
+				Basename:       name + ".jpg",
+				ParentFolderID: folderIDs[folderIdxWithImageFiles],
+				Fingerprints: models.Fingerprints{
+					{Type: models.FingerprintTypeMD5, Fingerprint: name + "_md5"},
+					{Type: models.FingerprintTypePhash, Fingerprint: phash},
+				},
+			},
+			Width:  1920,
+			Height: 1080,
+		}
+
+		if err := db.File.Create(ctx, imageFile); err != nil {
+			return nil, err
+		}
+
+		image := &models.Image{
+			Title:     name,
+			Organized: organized,
+		}
+
+		if err := qb.Create(ctx, &models.CreateImageInput{
+			Image:   image,
+			FileIDs: []models.FileID{imageFile.ID},
+		}); err != nil {
+			return nil, err
+		}
+
+		return image, nil
+	}
+
+	withRollbackTxn(func(ctx context.Context) error {
+		// Create two pairs of duplicate images:
+		// Pair A: images have the same phash and are organized
+		// Pair B: images have the same phash and are not organized
+
+		const sharedPhash int64 = 999999
+		const otherPhash int64 = 888888
+
+		pairA1, err := createDupeImage(ctx, "FilterImage_A1", sharedPhash, true)
+		if err != nil {
+			t.Errorf("failed to create pair A image 1: %v", err)
+			return nil
+		}
+		pairA2, err := createDupeImage(ctx, "FilterImage_A2", sharedPhash, true)
+		if err != nil {
+			t.Errorf("failed to create pair A image 2: %v", err)
+			return nil
+		}
+		pairB1, err := createDupeImage(ctx, "FilterImage_B1", otherPhash, false)
+		if err != nil {
+			t.Errorf("failed to create pair B image 1: %v", err)
+			return nil
+		}
+		pairB2, err := createDupeImage(ctx, "FilterImage_B2", otherPhash, false)
+		if err != nil {
+			t.Errorf("failed to create pair B image 2: %v", err)
+			return nil
+		}
+
+		// Test 1: No filter - should find both pairs
+		got, err := qb.FindDuplicates(ctx, 0, nil)
+		if err != nil {
+			t.Errorf("FindDuplicates(nil filter) error = %v", err)
+			return nil
+		}
+		assert.Len(t, got, 2, "nil filter should find both duplicate pairs")
+
+		// Test 2: Filter by organized - should only find pair A
+		organized := true
+		got, err = qb.FindDuplicates(ctx, 0, &models.ImageFilterType{
+			Organized: &organized,
+		})
+		if err != nil {
+			t.Errorf("FindDuplicates(organized filter) error = %v", err)
+			return nil
+		}
+		assert.Len(t, got, 1, "organized filter should find exactly 1 duplicate pair")
+		if len(got) == 1 {
+			foundIDs := map[int]bool{}
+			for _, image := range got[0] {
+				foundIDs[image.ID] = true
+			}
+			assert.True(t, foundIDs[pairA1.ID], "pair A image 1 should be in results")
+			assert.True(t, foundIDs[pairA2.ID], "pair A image 2 should be in results")
+			assert.False(t, foundIDs[pairB1.ID], "pair B image 1 should NOT be in organized-filtered results")
+			assert.False(t, foundIDs[pairB2.ID], "pair B image 2 should NOT be in organized-filtered results")
+		}
+
+		// Test 3: Filter that matches nothing - should find no duplicates
+		singleID := pairA1.ID
+		got, err = qb.FindDuplicates(ctx, 0, &models.ImageFilterType{
+			ID: &models.IntCriterionInput{
+				Value:    singleID,
+				Modifier: models.CriterionModifierEquals,
+			},
+		})
+		if err != nil {
+			t.Errorf("FindDuplicates(single id filter) error = %v", err)
+			return nil
+		}
+		assert.Len(t, got, 0, "filter that matches nothing should find no duplicates")
+
+		// Test 4: Fuzzy match (distance=1) with filter
+		got, err = qb.FindDuplicates(ctx, 1, &models.ImageFilterType{
+			Organized: &organized,
+		})
+		if err != nil {
+			t.Errorf("FindDuplicates(fuzzy + organized filter) error = %v", err)
+			return nil
+		}
+		assert.Len(t, got, 1, "fuzzy + organized filter should find exactly 1 duplicate pair")
+
+		return nil
+	})
+}
+
+func TestImageQueryIsMissingPhash(t *testing.T) {
+	qb := db.Image
+
+	// Helper to create an image with a single file with the given phash (if any)
+	createImage := func(ctx context.Context, name string, phash *int64) (*models.Image, error) {
+		fingerprints := models.Fingerprints{
+			{Type: models.FingerprintTypeMD5, Fingerprint: name + "_md5"},
+		}
+		if phash != nil {
+			fingerprints = append(fingerprints, models.Fingerprint{
+				Type:        models.FingerprintTypePhash,
+				Fingerprint: *phash,
+			})
+		}
+
+		imageFile := &models.ImageFile{
+			BaseFile: &models.BaseFile{
+				Path:           getFilePath(folderIdxWithImageFiles, name+".jpg"),
+				Basename:       name + ".jpg",
+				ParentFolderID: folderIDs[folderIdxWithImageFiles],
+				Fingerprints:   fingerprints,
+			},
+			Width:  1920,
+			Height: 1080,
+		}
+
+		if err := db.File.Create(ctx, imageFile); err != nil {
+			return nil, err
+		}
+
+		image := &models.Image{Title: name}
+
+		if err := qb.Create(ctx, &models.CreateImageInput{
+			Image:   image,
+			FileIDs: []models.FileID{imageFile.ID},
+		}); err != nil {
+			return nil, err
+		}
+
+		return image, nil
+	}
+
+	withRollbackTxn(func(ctx context.Context) error {
+		testPhash := int64(555555)
+
+		withPhash, err := createImage(ctx, "IsMissingPhash_WithPhash", &testPhash)
+		if err != nil {
+			t.Errorf("failed to create image with phash: %v", err)
+			return nil
+		}
+		withoutPhash, err := createImage(ctx, "IsMissingPhash_WithoutPhash", nil)
+		if err != nil {
+			t.Errorf("failed to create image without phash: %v", err)
+			return nil
+		}
+
+		isMissing := "phash"
+		imageFilter := models.ImageFilterType{
+			IsMissing: &isMissing,
+			ID: &models.IntCriterionInput{
+				Value:    withoutPhash.ID,
+				Modifier: models.CriterionModifierNotEquals,
+			},
+		}
+
+		images, count, err := queryImagesWithCount(ctx, qb, &imageFilter, nil)
+		if err != nil {
+			t.Errorf("error querying image: %s", err.Error())
+			return nil
+		}
+
+		// The image with the phash should not be returned
+		assert.False(t, containsImageID(images, withPhash.ID), "image with phash should not be in results")
+		assert.True(t, count > 0)
+
+		return nil
+	})
+}
+
+func containsImageID(images []*models.Image, id int) bool {
+	for _, image := range images {
+		if image.ID == id {
+			return true
+		}
+	}
+	return false
+}
+
+func TestImageStore_FindDuplicateImageFiles(t *testing.T) {
+	qb := db.Image
+
+	createFile := func(ctx context.Context, name string, md5 string) (models.FileID, error) {
+		imageFile := &models.ImageFile{
+			BaseFile: &models.BaseFile{
+				Path:           getFilePath(folderIdxWithImageFiles, name),
+				Basename:       name,
+				ParentFolderID: folderIDs[folderIdxWithImageFiles],
+				Fingerprints: models.Fingerprints{
+					{Type: models.FingerprintTypeMD5, Fingerprint: md5},
+				},
+			},
+			Width:  100,
+			Height: 100,
+		}
+
+		if err := db.File.Create(ctx, imageFile); err != nil {
+			return 0, err
+		}
+
+		return imageFile.ID, nil
+	}
+
+	createImage := func(ctx context.Context, title string, fileIDs ...models.FileID) error {
+		return qb.Create(ctx, &models.CreateImageInput{
+			Image:   &models.Image{Title: title},
+			FileIDs: fileIDs,
+		})
+	}
+
+	withRollbackTxn(func(ctx context.Context) error {
+		// Image A has two identical loose files
+		a1, err := createFile(ctx, "ByteDup_A1.jpg", "sameWithinImage")
+		if err != nil {
+			t.Errorf("failed to create file A1: %v", err)
+			return nil
+		}
+		a2, err := createFile(ctx, "ByteDup_A2.jpg", "sameWithinImage")
+		if err != nil {
+			t.Errorf("failed to create file A2: %v", err)
+			return nil
+		}
+		if err := createImage(ctx, "ByteDup Image A", a1, a2); err != nil {
+			t.Errorf("failed to create image A: %v", err)
+			return nil
+		}
+
+		// Images C and D each have a single file with the same content
+		c, err := createFile(ctx, "ByteDup_C.jpg", "sameAcrossImages")
+		if err != nil {
+			t.Errorf("failed to create file C: %v", err)
+			return nil
+		}
+		d, err := createFile(ctx, "ByteDup_D.jpg", "sameAcrossImages")
+		if err != nil {
+			t.Errorf("failed to create file D: %v", err)
+			return nil
+		}
+		if err := createImage(ctx, "ByteDup Image C", c); err != nil {
+			t.Errorf("failed to create image C: %v", err)
+			return nil
+		}
+		if err := createImage(ctx, "ByteDup Image D", d); err != nil {
+			t.Errorf("failed to create image D: %v", err)
+			return nil
+		}
+
+		// Image E has a single unique file
+		u, err := createFile(ctx, "ByteDup_Unique.jpg", "uniqueFile")
+		if err != nil {
+			t.Errorf("failed to create file E: %v", err)
+			return nil
+		}
+		if err := createImage(ctx, "ByteDup Image E", u); err != nil {
+			t.Errorf("failed to create image E: %v", err)
+			return nil
+		}
+
+		groups, err := qb.FindDuplicateImageFiles(ctx)
+		if err != nil {
+			t.Errorf("FindDuplicateImageFiles() error = %v", err)
+			return nil
+		}
+
+		assert.Len(t, groups, 2)
+
+		// collect the basenames of the returned duplicate files
+		gotBasenames := map[string]bool{}
+		for _, group := range groups {
+			assert.Len(t, group, 2)
+			for _, pair := range group {
+				gotBasenames[pair.File.Basename] = true
+				assert.NotNil(t, pair.Image)
+			}
+		}
+
+		assert.True(t, gotBasenames["ByteDup_A1.jpg"], "A1 should be returned as a duplicate")
+		assert.True(t, gotBasenames["ByteDup_A2.jpg"], "A2 should be returned as a duplicate")
+		assert.True(t, gotBasenames["ByteDup_C.jpg"], "C should be returned as a duplicate")
+		assert.True(t, gotBasenames["ByteDup_D.jpg"], "D should be returned as a duplicate")
+		assert.False(t, gotBasenames["ByteDup_Unique.jpg"], "unique file should not be returned")
+
+		return nil
+	})
+}

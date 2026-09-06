@@ -79,6 +79,20 @@ type Query {
     filter: FindFilterType
   ): FindImagesResultType!
 
+  """
+  Returns any groups of images that are perceptual duplicates within the queried distance
+  """
+  findDuplicateImages(
+    distance: Int
+    image_filter: ImageFilterType
+  ): [[Image!]!]!
+
+  """
+  Returns any groups of image files that are byte-identical duplicates (same md5 fingerprint).
+  Files inside zip archives are not considered.
+  """
+  findDuplicateImageFiles: [[ImageDuplicateFile!]!]!
+
   "Find a performer by ID"
   findPerformer(id: ID!): Performer
   "A function which queries Performer objects"
@@ -425,6 +439,15 @@ type Mutation {
   deleteFiles(ids: [ID!]!): Boolean!
   "Deletes file entries from the database without deleting the files from the filesystem"
   destroyFiles(ids: [ID!]!): Boolean!
+
+  """
+  Deletes the provided duplicate image files. Images that are left with no
+  files are deleted as well, along with their generated files if these are not
+  shared with any remaining file. Folder gallery memberships of affected
+  images are repaired, and folders that become empty as a result are deleted
+  together with their database records.
+  """
+  destroyDuplicateImageFiles(file_ids: [ID!]!): Boolean!
 
   fileSetFingerprints(input: FileSetFingerprintsInput!): Boolean!
   "Reveal the file in the system file manager"

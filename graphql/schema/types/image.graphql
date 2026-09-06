@@ -105,3 +105,11 @@ type FindImagesResultType {
   filesize: Float!
   images: [Image!]!
 }
+
+"An image file that is a byte-level duplicate of another image file, together with the image that it belongs to"
+type ImageDuplicateFile {
+  "The image that the duplicate file belongs to"
+  image: Image!
+  "The duplicate image file"
+  file: ImageFile!
+}

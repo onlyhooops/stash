@@ -7,10 +7,14 @@ import (
 	"fmt"
 	"path/filepath"
 	"slices"
+	"sort"
+	"strconv"
+	"strings"
 
 	"github.com/jmoiron/sqlx"
 	"github.com/stashapp/stash/pkg/models"
 	"github.com/stashapp/stash/pkg/sliceutil"
+	"github.com/stashapp/stash/pkg/utils"
 	"gopkg.in/guregu/null.v4"
 	"gopkg.in/guregu/null.v4/zero"
 
@@ -1016,6 +1020,260 @@ func (qb *ImageStore) QueryCount(ctx context.Context, imageFilter *models.ImageF
 	}
 
 	return query.executeCount(ctx)
+}
+
+// FindDuplicates returns image ids that have duplicate phashes, grouped into
+// duplicate sets. The phash fingerprints of the image files are used for the
+// comparison. Where distance is 0, only images with exactly the same phash are
+// considered duplicates. Otherwise, images whose phashes are within the given
+// distance are considered duplicates.
+func (qb *ImageStore) FindDuplicates(ctx context.Context, distance int, filter *models.ImageFilterType) ([][]*models.Image, error) {
+	var dupeIds [][]int
+
+	query, err := qb.makeQuery(ctx, filter, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	// Add necessary joins for duplicate checking
+	query.addJoins(
+		join{
+			table:    imagesFilesTable,
+			onClause: "images_files.image_id = images.id",
+		},
+		join{
+			table:    fileTable,
+			onClause: "images_files.file_id = files.id",
+		},
+		join{
+			table:    fingerprintTable,
+			onClause: "images_files.file_id = files_fingerprints.file_id AND files_fingerprints.type = 'phash'",
+		},
+	)
+
+	if distance == 0 {
+		query.columns = []string{
+			"images.id as image_id",
+			"files.size as file_size",
+			"files_fingerprints.fingerprint as phash",
+		}
+
+		sqlStr := query.toSQL(false)
+
+		finalQuery := `
+SELECT GROUP_CONCAT(DISTINCT image_id) as ids
+FROM (` + sqlStr + `)
+WHERE phash IS NOT NULL
+GROUP BY phash
+HAVING COUNT(phash) > 1
+	AND COUNT(DISTINCT image_id) > 1
+ORDER BY SUM(file_size) DESC;
+`
+
+		var ids []string
+		args := query.allArgs()
+		if err := dbWrapper.Select(ctx, &ids, finalQuery, args...); err != nil {
+			return nil, err
+		}
+
+		for _, id := range ids {
+			strIds := strings.Split(id, ",")
+			var imageIds []int
+			for _, strId := range strIds {
+				if intId, err := strconv.Atoi(strId); err == nil {
+					imageIds = sliceutil.AppendUnique(imageIds, intId)
+				}
+			}
+			// filter out
+			if len(imageIds) > 1 {
+				dupeIds = append(dupeIds, imageIds)
+			}
+		}
+	} else {
+		query.columns = []string{
+			"images.id as id",
+			"files_fingerprints.fingerprint as phash",
+		}
+		query.addWhere("files_fingerprints.fingerprint IS NOT NULL")
+		query.sortAndPagination = " ORDER BY files.size DESC"
+
+		sqlStr := query.toSQL(true)
+
+		var hashes []*utils.Phash
+
+		if err := imageRepository.queryFunc(ctx, sqlStr, query.allArgs(), false, func(rows *sqlx.Rows) error {
+			phash := utils.Phash{
+				Bucket:   -1,
+				Duration: -1,
+			}
+			if err := rows.StructScan(&phash); err != nil {
+				return err
+			}
+
+			hashes = append(hashes, &phash)
+			return nil
+		}); err != nil {
+			return nil, err
+		}
+
+		// negative durationDiff to disable duration checking
+		dupeIds = utils.FindDuplicates(hashes, distance, -1)
+	}
+
+	var duplicates [][]*models.Image
+	for _, imageIds := range dupeIds {
+		if images, err := qb.FindMany(ctx, imageIds); err == nil {
+			duplicates = append(duplicates, images)
+		}
+	}
+
+	sortByImagePath(duplicates)
+
+	return duplicates, nil
+}
+
+func sortByImagePath(images [][]*models.Image) {
+	lessFunc := func(i int, j int) bool {
+		firstPathI := getFirstImagePath(images[i])
+		firstPathJ := getFirstImagePath(images[j])
+		return firstPathI < firstPathJ
+	}
+	sort.SliceStable(images, lessFunc)
+}
+
+func getFirstImagePath(images []*models.Image) string {
+	var firstPath string
+	for i, image := range images {
+		if i == 0 || image.Path < firstPath {
+			firstPath = image.Path
+		}
+	}
+	return firstPath
+}
+
+// FindDuplicateImageFiles returns image files that have the same content
+// fingerprint (md5), grouped into duplicate sets. Files inside zip archives
+// are not considered. Each result contains the duplicate file together with
+// the image that the file belongs to, so that the same image may appear more
+// than once where it has multiple duplicate files.
+func (qb *ImageStore) FindDuplicateImageFiles(ctx context.Context) ([][]*models.ImageDuplicateFile, error) {
+	const query = `
+SELECT ff.fingerprint AS md5hash, imf.image_id, ff.file_id
+FROM files_fingerprints ff
+INNER JOIN images_files imf ON imf.file_id = ff.file_id
+INNER JOIN files f ON f.id = ff.file_id
+INNER JOIN folders fol ON fol.id = f.parent_folder_id
+WHERE ff.type = 'md5'
+	AND fol.zip_file_id IS NULL
+	AND ff.fingerprint IN (
+		SELECT ff2.fingerprint
+		FROM files_fingerprints ff2
+		INNER JOIN images_files imf2 ON imf2.file_id = ff2.file_id
+		INNER JOIN files f2 ON f2.id = imf2.file_id
+		INNER JOIN folders fol2 ON fol2.id = f2.parent_folder_id
+		WHERE ff2.type = 'md5'
+			AND fol2.zip_file_id IS NULL
+		GROUP BY ff2.fingerprint
+		HAVING COUNT(DISTINCT ff2.file_id) > 1
+	)
+ORDER BY ff.fingerprint ASC, f.size DESC, ff.file_id ASC`
+
+	var rows []struct {
+		MD5     string        `db:"md5hash"`
+		ImageID int           `db:"image_id"`
+		FileID  models.FileID `db:"file_id"`
+	}
+
+	if err := dbWrapper.Select(ctx, &rows, query); err != nil {
+		return nil, err
+	}
+
+	if len(rows) == 0 {
+		return nil, nil
+	}
+
+	// load the files and images for the rows in bulk
+	var fileIDs []models.FileID
+	imageIDs := []int{}
+	fileIDSet := map[models.FileID]bool{}
+	imageIDSet := map[int]bool{}
+	for _, row := range rows {
+		if !fileIDSet[row.FileID] {
+			fileIDSet[row.FileID] = true
+			fileIDs = append(fileIDs, row.FileID)
+		}
+		if !imageIDSet[row.ImageID] {
+			imageIDSet[row.ImageID] = true
+			imageIDs = append(imageIDs, row.ImageID)
+		}
+	}
+
+	files, err := qb.repo.File.Find(ctx, fileIDs...)
+	if err != nil {
+		return nil, err
+	}
+
+	images, err := qb.FindMany(ctx, imageIDs)
+	if err != nil {
+		return nil, err
+	}
+
+	fileMap := make(map[models.FileID]*models.ImageFile, len(files))
+	for _, f := range files {
+		if imageFile, ok := f.(*models.ImageFile); ok {
+			fileMap[imageFile.ID] = imageFile
+		}
+	}
+
+	imageMap := make(map[int]*models.Image, len(images))
+	for _, image := range images {
+		imageMap[image.ID] = image
+	}
+
+	// group the rows by their md5 fingerprint, preserving the row order
+	groupIndices := map[string]int{}
+	var groups [][]*models.ImageDuplicateFile
+	for _, row := range rows {
+		file := fileMap[row.FileID]
+		image := imageMap[row.ImageID]
+		if file == nil || image == nil {
+			continue
+		}
+
+		pair := &models.ImageDuplicateFile{
+			Image: image,
+			File:  file,
+		}
+
+		groupIndex, ok := groupIndices[row.MD5]
+		if !ok {
+			groupIndex = len(groups)
+			groupIndices[row.MD5] = groupIndex
+			groups = append(groups, nil)
+		}
+		groups[groupIndex] = append(groups[groupIndex], pair)
+	}
+
+	sortDuplicateImageFileGroups(groups)
+
+	return groups, nil
+}
+
+func sortDuplicateImageFileGroups(groups [][]*models.ImageDuplicateFile) {
+	firstPath := func(group []*models.ImageDuplicateFile) string {
+		path := ""
+		for i, pair := range group {
+			p := pair.File.Path
+			if i == 0 || p < path {
+				path = p
+			}
+		}
+		return path
+	}
+
+	sort.SliceStable(groups, func(i int, j int) bool {
+		return firstPath(groups[i]) < firstPath(groups[j])
+	})
 }
 
 var imageSortOptions = sortOptions{

@@ -49,6 +49,8 @@ models:
     model: github.com/stashapp/stash/pkg/models.Group
   MovieFilterType:
     model: github.com/stashapp/stash/pkg/models.GroupFilterType
+  ImageDuplicateFile:
+    model: github.com/stashapp/stash/pkg/models.ImageDuplicateFile
   # autobind on config causes generation issues
   BlobsStorageType:
     model: github.com/stashapp/stash/internal/manager/config.BlobsStorageType
