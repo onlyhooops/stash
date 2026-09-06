@@ -652,7 +652,9 @@
         "whitespace_chars": "Whitespace characters",
         "whitespace_chars_desc": "These characters will be replaced with whitespace in the title"
       },
-      "scene_tools": "Scene Tools"
+      "scene_tools": "Scene Tools",
+      "image_tools": "Image Tools",
+      "image_duplicate_checker": "Image duplicate checker"
     },
     "ui": {
       "abbreviate_counters": {
@@ -1260,6 +1262,20 @@
   "ignore_auto_tag": "Ignore auto tag",
   "image": "Image",
   "image_count": "Image Count",
+  "image_dupe_check": {
+    "delete_confirm": "Delete {count, plural, one {this duplicate file} other {these # duplicate files}} from disk?",
+    "folder_label": "Preferred folder",
+    "identical_description": "Finds image files that are byte-for-byte identical (same md5 fingerprint), including multiple identical copies attached to the same image. Files inside zip archives are excluded. Delete the extra copies to free up disk space.",
+    "missing_phashes": "Missing phashes for {count} images. Please run the phash generation task.",
+    "no_duplicates": "No duplicates found.",
+    "select_all_but_oldest_copy": "Select all but the oldest copy of each duplicated image",
+    "select_all_but_youngest_copy": "Select all but the youngest copy of each duplicated image",
+    "select_all_in_folder": "Select every file in the preferred folder",
+    "title": "Duplicate Images",
+    "type_identical": "Byte-identical (md5)",
+    "type_label": "Duplicate type",
+    "type_perceptual": "Perceptual (phash)"
+  },
   "image_index": "Image #",
   "images": "Images",
   "include_parent_tags": "Include parent tags",

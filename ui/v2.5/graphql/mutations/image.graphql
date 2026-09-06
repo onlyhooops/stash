@@ -55,3 +55,7 @@ mutation ImagesDestroy(
     }
   )
 }
+
+mutation DestroyDuplicateImageFiles($file_ids: [ID!]!) {
+  destroyDuplicateImageFiles(file_ids: $file_ids)
+}

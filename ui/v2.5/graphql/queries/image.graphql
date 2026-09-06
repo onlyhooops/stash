@@ -35,3 +35,25 @@ query FindImage($id: ID!, $checksum: String) {
     ...ImageData
   }
 }
+
+query FindDuplicateImages($distance: Int) {
+  findDuplicateImages(distance: $distance) {
+    ...SlimImageData
+  }
+}
+
+query FindDuplicateImageFiles {
+  findDuplicateImageFiles {
+    image {
+      ...SlimImageData
+    }
+    file {
+      id
+      path
+      size
+      mod_time
+      width
+      height
+    }
+  }
+}

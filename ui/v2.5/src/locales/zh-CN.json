@@ -630,6 +630,8 @@
                 "whitespace_chars_desc": "这些字符在标题中会替换为空白字符"
             },
             "scene_tools": "短片工具",
+            "image_tools": "图片工具",
+            "image_duplicate_checker": "图片重复性检查工具",
             "heading": "工具",
             "graphql_playground": "GraphQL试验场"
         },
@@ -1201,6 +1203,20 @@
     "ignore_auto_tag": "忽略自动标签",
     "image": "图片",
     "image_count": "图片数量",
+    "image_dupe_check": {
+      "delete_confirm": "从磁盘删除{count, plural, one {该重复文件} other {这 # 个重复文件}}？",
+      "folder_label": "首选文件夹",
+      "identical_description": "查找内容完全相同的图片文件（md5 指纹一致），包括同一张图片下挂载的多份相同副本；不包含压缩包(zip)内的文件。删除多余副本可释放磁盘空间。",
+      "missing_phashes": "有 {count} 张图片缺少 phash，请运行 phash 生成任务。",
+      "no_duplicates": "未发现重复项。",
+      "select_all_but_oldest_copy": "选中每张重复图片中除最旧副本以外的其余副本",
+      "select_all_but_youngest_copy": "选中每张重复图片中除最新副本以外的其余副本",
+      "select_all_in_folder": "选中首选文件夹中的所有重复文件",
+      "title": "重复图片",
+      "type_identical": "字节级完全相同 (md5)",
+      "type_label": "重复类型",
+      "type_perceptual": "感知哈希相似 (phash)"
+    },
     "image_index": "图像 #",
     "images": "图片",
     "include_parent_tags": "包含上级标签",

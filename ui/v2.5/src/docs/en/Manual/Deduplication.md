@@ -19,3 +19,20 @@ The `Select Options…` dropdown provides shortcuts for bulk-selecting files acr
 - **Preferred codec** keeps the file matching the codec chosen in the `Preferred Video Codec` dropdown, which lists the codecs detected among the current duplicate results. Groups that contain no file with the preferred codec are left untouched, so nothing is selected when there is no matching file to keep.
 
 The `Only select if all codecs match in the duplicate group` checkbox is a safety option for the size, resolution and age selections: when enabled, groups whose files use different codecs are skipped, so you don't accidentally select a file that was encoded with a different codec. It does not apply to the preferred-codec selection, which is codec-aware by design.
+
+## Images
+
+Duplicate checking is also available for images, via the [image duplicate checker](/imageDuplicateChecker). As with scenes, stash generates a phash for each image file, which can be run during scan ("Generate image phashes during scan") or as a separate task, and the same four accuracy levels (`Exact`, `High`, `Medium`, `Low`) are used to group perceptually similar images.
+
+Because images don't have a duration, there is no duration-based matching. The `Select Options…` shortcuts work in the same way as for scenes, with the exception of the codec-based options, which only apply to video files.
+
+### Byte-identical duplicates
+
+The `Duplicate type` selector switches between two detection modes:
+
+- **Perceptual (phash)** – the behaviour described above: groups images whose perceptual hashes are identical or similar.
+- **Byte-identical (md5)** – finds image files whose contents are byte-for-byte identical (same md5 fingerprint), including multiple identical copies that stash attached to the same image when scanning duplicate paths. Files inside zip archives are not considered.
+
+In the byte-identical mode, each duplicated file is listed with the image it belongs to, so a single image with several identical copies appears multiple times. Use the checkboxes or `Select Options…` (which keeps the oldest or youngest copy of each duplicated image, or selects every file in a chosen `Preferred folder`) to select the extra copies and delete them.
+
+Deleting removes the files from disk and frees up space, and automatically keeps the stash database consistent: images that are left without any files are removed together with their generated thumbnails when these are not shared with a remaining copy; images are removed from folder galleries when they no longer have a file in that folder; and folders that become completely empty are removed too (library roots and non-empty folders are never touched).
